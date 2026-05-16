@@ -103,7 +103,7 @@ export default function Navbar() {
               </div>
             </div>
             <span className="text-xl font-bold gradient-text hidden sm:block tracking-tight">
-              Torrinto
+              Torrentio
             </span>
           </a>
 

@@ -46,7 +46,7 @@ export default function Loading() {
 
       {/* Name */}
       <h1 className="text-2xl font-black gradient-text tracking-tight mb-2">
-        Torrinto
+        Torrentio
       </h1>
       <p className="text-sm text-gray-500 mb-10">
         Loading your anime...
