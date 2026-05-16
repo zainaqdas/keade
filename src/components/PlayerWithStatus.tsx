@@ -119,8 +119,8 @@ export default function PlayerWithStatus({
   return (
     <section className="glass rounded-2xl p-4">
       {/* ── Header ── */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
           <h2 className="text-lg font-bold text-white">Now Playing</h2>
           {/* SDK loading badge */}
           {loading && !error && mode === 'sdk' && (
@@ -175,14 +175,16 @@ export default function PlayerWithStatus({
       </div>
 
       {/* ── Player Container ── */}
-      <div className="relative rounded-xl overflow-hidden bg-black border border-white/5">
-        <div className="w-full" style={{ minHeight: '360px', maxHeight: '540px' }}>
+      {/* Note: no overflow-hidden here — WebTor SDK renders controls that
+          extend to the edge, and clipping them hides the fullscreen button. */}
+      <div className="relative rounded-xl bg-black border border-white/5">
+        <div className="w-full" style={{ minHeight: '360px' }}>
           {/* SDK Container (primary) — only in DOM when active */}
           {mode === 'sdk' && (
             <div
               id="webtor-sdk-container"
               className="webtor w-full h-full"
-              style={{ minHeight: '360px', maxHeight: '540px' }}
+              style={{ minHeight: '360px' }}
             />
           )}
 
@@ -192,7 +194,7 @@ export default function PlayerWithStatus({
               src={embedUrl}
               title="Video Player"
               className="w-full h-full border-0"
-              style={{ minHeight: '360px', maxHeight: '540px' }}
+              style={{ minHeight: '360px' }}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
               allowFullScreen
               onLoad={handleIframeLoad}
