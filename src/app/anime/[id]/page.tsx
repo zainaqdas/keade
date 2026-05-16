@@ -1,42 +1,51 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { AnimeDetailData, NyaaTorrent } from '@/lib/types';
-import { extractEpisodeNumber, isBatchTorrent } from '@/lib/nyaa/parser';
+import { isBatchTorrent } from '@/lib/nyaa/parser';
 import { stripHtml, formatScore, formatNumber, statusColor, formatStatus } from '@/lib/utils';
 import PlayerWithStatus from '@/components/PlayerWithStatus';
 
-interface EpisodeGroup {
-  label: string;
-  episode: number | null;
-  torrents: NyaaTorrent[];
-}
+const EPISODES_PER_PAGE = 50;
 
 export default function AnimeDetailPage({ params }: { params: { id: string } }) {
   const id = params.id;
   const [anime, setAnime] = useState<AnimeDetailData | null>(null);
-  const [torrents, setTorrents] = useState<NyaaTorrent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [torrentsLoading, setTorrentsLoading] = useState(true);
-  const [expandedEpisode, setExpandedEpisode] = useState<number | null>(null);
+  const [selectedEpisode, setSelectedEpisode] = useState<number | null>(null);
+  const [episodeTorrents, setEpisodeTorrents] = useState<Record<number, NyaaTorrent[]>>({});
+  const [episodeLoading, setEpisodeLoading] = useState(false);
+  const [episodePage, setEpisodePage] = useState(0);
+  const [episodeSearch, setEpisodeSearch] = useState('');
   const [playingTorrent, setPlayingTorrent] = useState<NyaaTorrent | null>(null);
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playerVisible, setPlayerVisible] = useState(false);
+  const searchTermsRef = useRef<string>('');
 
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
       try {
         const res = await fetch(`/api/anime/${id}`);
+        if (!res.ok) {
+          if (res.status === 404) throw new Error('Anime not found');
+          throw new Error('Failed to load anime details');
+        }
         const data = await res.json();
-        
         if (!data.data) throw new Error('No anime data found');
         const animeData = data.data as AnimeDetailData;
         setAnime(animeData);
-        fetchTorrents(animeData);
+
+        // Build search terms once for later episode lookups
+        const terms = [
+          animeData.title.english,
+          animeData.title.romaji,
+          ...animeData.synonyms.slice(0, 3),
+        ].filter(Boolean).join(',');
+        searchTermsRef.current = terms;
       } catch (err) {
-        setError('Failed to load anime details');
+        setError(err instanceof Error ? err.message : 'Failed to load anime details');
         console.error(err);
       } finally {
         setLoading(false);
@@ -45,29 +54,33 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
     fetchData();
   }, [id]);
 
-  async function fetchTorrents(animeData: AnimeDetailData) {
-    setTorrentsLoading(true);
-    try {
-      const searchTerms = [
-        animeData.title.english,
-        animeData.title.romaji,
-        ...animeData.synonyms.slice(0, 2),
-      ].filter(Boolean).join(',');
-
-      const res = await fetch(`/api/torrents?q=${encodeURIComponent(animeData.title.romaji)}&synonyms=${encodeURIComponent(searchTerms)}`);
-      const data = await res.json();
-      setTorrents(data.torrents || []);
-    } catch (err) {
-      console.error('Failed to fetch torrents:', err);
-    } finally {
-      setTorrentsLoading(false);
+  const fetchEpisodeTorrents = useCallback(async (episode: number) => {
+    // Already cached
+    if (episodeTorrents[episode]) {
+      setSelectedEpisode(prev => prev === episode ? null : episode);
+      return;
     }
-  }
+
+    setEpisodeLoading(true);
+    setSelectedEpisode(episode);
+
+    try {
+      const q = encodeURIComponent(anime?.title.romaji || '');
+      const synonyms = encodeURIComponent(searchTermsRef.current);
+      const res = await fetch(`/api/torrents?q=${q}&synonyms=${synonyms}&episode=${episode}`);
+      const data = await res.json();
+      setEpisodeTorrents(prev => ({ ...prev, [episode]: data.torrents || [] }));
+    } catch (err) {
+      console.error('Failed to fetch episode torrents:', err);
+      setEpisodeTorrents(prev => ({ ...prev, [episode]: [] }));
+    } finally {
+      setEpisodeLoading(false);
+    }
+  }, [anime, episodeTorrents]);
 
   const handlePlay = useCallback((torrent: NyaaTorrent) => {
     setPlayingTorrent(torrent);
     setPlayerVisible(true);
-    // Scroll to player smoothly after render
     setTimeout(() => {
       document.getElementById('player-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 100);
@@ -79,7 +92,6 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
       setCopiedHash(torrent.hash);
       setTimeout(() => setCopiedHash(null), 2000);
     } catch {
-      // Fallback
       const textArea = document.createElement('textarea');
       textArea.value = torrent.magnet;
       document.body.appendChild(textArea);
@@ -89,10 +101,6 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
       setCopiedHash(torrent.hash);
       setTimeout(() => setCopiedHash(null), 2000);
     }
-  }, []);
-
-  const toggleEpisode = useCallback((ep: number | null) => {
-    setExpandedEpisode(prev => prev === ep ? null : ep);
   }, []);
 
   if (loading) {
@@ -110,10 +118,28 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
     );
   }
 
-  const episodeGroups = groupTorrentsByEpisode(torrents);
-  const hasTorrents = torrents.length > 0;
   const title = anime.title.english || anime.title.romaji;
   const bannerBg = anime.bannerImage || anime.coverImage;
+
+  // Determine total episodes
+  const totalEpisodes = anime.episodes ||
+    (anime.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : 0) ||
+    anime.airingSchedule.length || 0;
+
+  // Generate episode numbers
+  const allEpisodes = Array.from({ length: totalEpisodes }, (_, i) => i + 1);
+
+  // Filter episodes by search
+  const filteredEpisodes = episodeSearch
+    ? allEpisodes.filter(ep => String(ep).includes(episodeSearch))
+    : allEpisodes;
+
+  // Paginate
+  const totalPages = Math.max(1, Math.ceil(filteredEpisodes.length / EPISODES_PER_PAGE));
+  const pageEpisodes = filteredEpisodes.slice(
+    episodePage * EPISODES_PER_PAGE,
+    (episodePage + 1) * EPISODES_PER_PAGE
+  );
 
   return (
     <div className="min-h-screen">
@@ -217,85 +243,191 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
 
             {/* Episodes Section */}
             <section>
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-white">Episodes</h2>
-                <span className="text-sm text-gray-500">
-                  {torrentsLoading ? 'Searching...' : `${torrents.length} torrents found`}
-                </span>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-white">
+                  Episodes
+                  {totalEpisodes > 0 && (
+                    <span className="text-sm font-normal text-gray-500 ml-2">
+                      ({totalEpisodes} total)
+                    </span>
+                  )}
+                </h2>
               </div>
 
-              {torrentsLoading ? (
-                <div className="space-y-3">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className="h-14 rounded-xl shimmer" />
-                  ))}
+              {/* Episode Search */}
+              {totalEpisodes > 0 && (
+                <div className="relative mb-4">
+                  <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={episodeSearch}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '');
+                      setEpisodeSearch(val);
+                      setEpisodePage(0);
+                    }}
+                    placeholder="Search episode by number..."
+                    className="w-full pl-9 pr-4 py-2 rounded-xl bg-[#111125] border border-white/10 text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20 transition-all"
+                  />
+                  {episodeSearch && (
+                    <button
+                      onClick={() => setEpisodeSearch('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
-              ) : hasTorrents ? (
-                <div className="space-y-2">
-                  {episodeGroups.map((group) => {
-                    const isExpanded = expandedEpisode === group.episode;
-                    return (
-                      <div key={group.label} className="rounded-2xl border border-white/5 overflow-hidden transition-all duration-200">
-                        {/* Episode Header (Clickable) */}
-                        <button
-                          onClick={() => toggleEpisode(group.episode)}
-                          className={`w-full flex items-center justify-between px-5 py-4 transition-colors ${
-                            isExpanded
-                              ? 'bg-indigo-500/10 border-b border-white/5'
-                              : 'bg-white/[0.02] hover:bg-white/[0.04]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm font-bold transition-all ${
-                              isExpanded
-                                ? 'bg-indigo-500/20 text-indigo-400'
-                                : 'bg-white/5 text-gray-400'
-                            }`}>
-                              {group.episode !== null ? group.episode : '••'}
-                            </div>
-                            <div className="text-left">
-                              <span className="text-white font-medium">
-                                {group.episode !== null ? `Episode ${group.episode}` : group.label}
-                              </span>
-                              <span className="ml-3 text-xs text-gray-500">
-                                {group.torrents.length} {group.torrents.length === 1 ? 'torrent' : 'torrents'}
-                              </span>
-                            </div>
-                          </div>
-                          <svg
-                            className={`w-5 h-5 text-gray-500 transition-transform duration-200 ${
-                              isExpanded ? 'rotate-180' : ''
-                            }`}
-                            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-                          >
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                          </svg>
-                        </button>
+              )}
 
-                        {/* Expanded Torrent List */}
-                        {isExpanded && (
-                          <div className="divide-y divide-white/5 animate-fade-in">
-                            {group.torrents.map((torrent) => (
-                              <TorrentItem
-                                key={torrent.hash}
-                                torrent={torrent}
-                                copiedHash={copiedHash}
-                                onPlay={handlePlay}
-                                onCopy={handleCopyMagnet}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+              {totalEpisodes === 0 ? (
+                <div className="text-center py-12 rounded-2xl bg-white/[0.02] border border-white/5">
+                  <div className="text-4xl mb-3">📺</div>
+                  <p className="text-gray-500 text-sm">Episode count unknown for this anime</p>
+                  <p className="text-gray-600 text-xs mt-1">Episode list will appear once available</p>
+                </div>
+              ) : filteredEpisodes.length === 0 ? (
+                <div className="text-center py-8 rounded-2xl bg-white/[0.02] border border-white/5">
+                  <p className="text-gray-500 text-sm">No episodes matching &quot;{episodeSearch}&quot;</p>
                 </div>
               ) : (
-                <div className="text-center py-12 rounded-2xl bg-white/[0.02] border border-white/5">
-                  <div className="text-4xl mb-3">🔍</div>
-                  <p className="text-gray-500 text-sm">No torrents found for this anime</p>
-                  <p className="text-gray-600 text-xs mt-1">Try searching with a different title</p>
-                </div>
+                <>
+                  {/* Episode Grid */}
+                  <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-1.5">
+                    {pageEpisodes.map((ep) => {
+                      const isSelected = selectedEpisode === ep;
+                      const hasTorrents = !!episodeTorrents[ep]?.length;
+                      return (
+                        <button
+                          key={ep}
+                          onClick={() => fetchEpisodeTorrents(ep)}
+                          className={`
+                            relative flex items-center justify-center h-10 rounded-lg text-sm font-medium
+                            transition-all duration-150
+                            ${isSelected
+                              ? 'bg-indigo-500/20 text-indigo-400 ring-1 ring-indigo-500/50 scale-105'
+                              : hasTorrents
+                                ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                                : 'bg-white/[0.04] text-gray-400 hover:bg-white/[0.08] hover:text-white'
+                            }
+                          `}
+                          title={`Episode ${ep}${hasTorrents ? ` (${episodeTorrents[ep].length} torrents)` : ''}`}
+                        >
+                          {ep}
+                          {hasTorrents && (
+                            <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-emerald-400 rounded-full" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Pagination Controls */}
+                  {totalPages > 1 && (
+                    <div className="flex items-center justify-center gap-2 mt-4">
+                      <button
+                        onClick={() => setEpisodePage(p => Math.max(0, p - 1))}
+                        disabled={episodePage === 0}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                      >
+                        Previous
+                      </button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                          let pageNum: number;
+                          if (totalPages <= 7) {
+                            pageNum = i;
+                          } else if (episodePage < 3) {
+                            pageNum = i;
+                          } else if (episodePage > totalPages - 4) {
+                            pageNum = totalPages - 7 + i;
+                          } else {
+                            pageNum = episodePage - 3 + i;
+                          }
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => setEpisodePage(pageNum)}
+                              className={`w-8 h-8 rounded-lg text-xs font-medium transition-all ${
+                                episodePage === pageNum
+                                  ? 'bg-indigo-500/20 text-indigo-400'
+                                  : 'bg-white/5 text-gray-500 hover:bg-white/10 hover:text-white'
+                              }`}
+                            >
+                              {pageNum + 1}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <button
+                        onClick={() => setEpisodePage(p => Math.min(totalPages - 1, p + 1))}
+                        disabled={episodePage >= totalPages - 1}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Selected Episode Torrent Results */}
+                  {selectedEpisode !== null && (
+                    <div className="mt-5">
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-8 h-8 rounded-xl bg-indigo-500/20 flex items-center justify-center text-sm font-bold text-indigo-400">
+                          {selectedEpisode}
+                        </div>
+                        <h3 className="text-white font-semibold">
+                          Episode {selectedEpisode}
+                        </h3>
+                        {episodeLoading && (
+                          <div className="flex items-center gap-2 text-xs text-gray-500">
+                            <div className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                            Searching Nyaa.si...
+                          </div>
+                        )}
+                        {!episodeLoading && episodeTorrents[selectedEpisode] && (
+                          <span className="text-xs text-gray-500">
+                            {episodeTorrents[selectedEpisode].length} torrent{episodeTorrents[selectedEpisode].length !== 1 ? 's' : ''} found
+                          </span>
+                        )}
+                      </div>
+
+                      {episodeLoading ? (
+                        <div className="space-y-2">
+                          {Array.from({ length: 3 }).map((_, i) => (
+                            <div key={i} className="h-16 rounded-xl shimmer" />
+                          ))}
+                        </div>
+                      ) : episodeTorrents[selectedEpisode]?.length > 0 ? (
+                        <div className="rounded-2xl border border-white/5 overflow-hidden divide-y divide-white/5">
+                          {episodeTorrents[selectedEpisode].map((torrent) => (
+                            <TorrentItem
+                              key={torrent.hash}
+                              torrent={torrent}
+                              copiedHash={copiedHash}
+                              onPlay={handlePlay}
+                              onCopy={handleCopyMagnet}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8 rounded-2xl bg-white/[0.02] border border-white/5">
+                          <div className="text-3xl mb-2">🔍</div>
+                          <p className="text-gray-500 text-sm">No torrents found for Episode {selectedEpisode}</p>
+                          <p className="text-gray-600 text-xs mt-1">
+                            Try searching with a different title or check back later
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </section>
           </div>
@@ -464,39 +596,6 @@ function InfoRow({ label, value, highlight }: { label: string; value: string; hi
 }
 
 /* ─── Helpers ─── */
-
-function groupTorrentsByEpisode(torrents: NyaaTorrent[]): EpisodeGroup[] {
-  const groups: Map<string, NyaaTorrent[]> = new Map();
-  const noEpisode: NyaaTorrent[] = [];
-
-  for (const torrent of torrents) {
-    const ep = torrent.episode ?? extractEpisodeNumber(torrent.name);
-    if (ep !== null) {
-      const key = `episode_${ep}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(torrent);
-    } else {
-      noEpisode.push(torrent);
-    }
-  }
-
-  const sortedGroups: EpisodeGroup[] = [];
-  const episodeKeys = Array.from(groups.keys()).sort((a, b) => {
-    return parseInt(a.replace('episode_', '')) - parseInt(b.replace('episode_', ''));
-  });
-
-  for (const key of episodeKeys) {
-    const torrents = groups.get(key)!;
-    const epNum = parseInt(key.replace('episode_', ''));
-    sortedGroups.push({ label: `Episode ${epNum}`, episode: epNum, torrents });
-  }
-
-  if (noEpisode.length > 0) {
-    sortedGroups.push({ label: 'Other / Batch', episode: null, torrents: noEpisode });
-  }
-
-  return sortedGroups;
-}
 
 function getQuality(name: string): string | null {
   const match = name.match(/(\d{3,4})p/i);

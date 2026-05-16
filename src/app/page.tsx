@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { AnimeCardData } from '@/lib/types';
 import { formatScore, statusColor, formatStatus } from '@/lib/utils';
 
@@ -8,12 +8,8 @@ export default function HomePage() {
   const [trending, setTrending] = useState<AnimeCardData[]>([]);
   const [popular, setPopular] = useState<AnimeCardData[]>([]);
   const [airing, setAiring] = useState<AnimeCardData[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<AnimeCardData[] | null>(null);
-  const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const searchRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function fetchSections() {
@@ -46,127 +42,77 @@ export default function HomePage() {
     fetchSections();
   }, []);
 
-  // Search with debounce
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchResults(null);
-      return;
-    }
 
-    const timer = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const res = await fetch(`/api/anime/search?q=${encodeURIComponent(searchQuery)}&perPage=20`);
-        const data = await res.json();
-        setSearchResults(data.media || []);
-      } catch (error) {
-        console.error('Search failed:', error);
-      } finally {
-        setSearching(false);
-      }
-    }, 400);
 
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+  // Hero slideshow data: top 6 airing anime with banners
+  const heroSlides = airing
+    .filter((a) => a.bannerImage && a.description)
+    .slice(0, 6);
+
+  // Latest episodes: airing anime sorted by next airing time
+  const latestEpisodes = airing
+    .filter((a) => a.nextAiringEpisode)
+    .sort((a, b) => (a.nextAiringEpisode?.timeUntilAiring ?? 999999) - (b.nextAiringEpisode?.timeUntilAiring ?? 999999))
+    .slice(0, 15);
 
   return (
     <div className="min-h-screen">
-      {/* Hero Section */}
-      <section className="relative overflow-hidden pb-12">
-        <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/5 via-purple-500/5 to-transparent" />
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-indigo-500/10 via-purple-500/5 to-transparent pointer-events-none" />
-        
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-12">
-          <div className="text-center max-w-3xl mx-auto space-y-6">
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-light text-sm text-gray-400">
-              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-              Discover & Stream Anime
-            </div>
-            
-            <h1 className="text-5xl sm:text-6xl lg:text-7xl font-black tracking-tight leading-tight">
-              <span className="gradient-text">Your Ultimate</span>
-              <br />
-              <span className="text-white">Anime Destination</span>
-            </h1>
-            
-            <p className="text-lg sm:text-xl text-gray-400 max-w-xl mx-auto leading-relaxed">
-              Browse trending anime, discover new series, and stream episodes directly in your browser with torrent-powered playback.
-            </p>
+      {/* ── Hero Slideshow ── */}
+      {!loading && heroSlides.length > 0 && (
+        <HeroSlideshow slides={heroSlides} />
+      )}
 
-            {/* Search Bar */}
-            <div className="max-w-2xl mx-auto mt-8" ref={searchRef}>
-              <div className="relative group">
-                <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl opacity-20 group-hover:opacity-30 blur-xl transition-opacity duration-500" />
-                <div className="relative flex items-center">
-                  <svg className="absolute left-5 w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search anime by title..."
-                    className="w-full pl-12 pr-6 py-4 rounded-2xl bg-[#111125] border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/20 transition-all text-lg"
-                  />
-                  {searching && (
-                    <div className="absolute right-5">
-                      <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                    </div>
-                  )}
-                </div>
+      {/* ── Search / Intro ── */}
+      {/* Only show the hero section text when we don't have airing banners to use */}
+      {loading || heroSlides.length === 0 ? (
+        <section className="relative overflow-hidden pb-12">
+          <div className="absolute inset-0 bg-gradient-to-b from-indigo-500/5 via-purple-500/5 to-transparent" />
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-radial from-indigo-500/10 via-purple-500/5 to-transparent pointer-events-none" />
+          
+          <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-12">
+            <div className="text-center max-w-3xl mx-auto space-y-6">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-light text-sm text-gray-400">
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                Discover & Stream Anime
               </div>
-
-              {/* Search Results Dropdown */}
-              {searchResults !== null && searchQuery.trim() && (
-                <div className="mt-3 rounded-2xl glass border border-white/10 overflow-hidden max-h-[500px] overflow-y-auto">
-                  {searchResults.length > 0 ? (
-                    searchResults.map((anime) => (
-                      <a
-                        key={anime.id}
-                        href={`/anime/${anime.id}`}
-                        className="flex items-center gap-4 p-4 hover:bg-white/5 transition-colors border-b border-white/5 last:border-0 group"
-                      >
-                        <img
-                          src={anime.coverImage}
-                          alt={anime.title.english || anime.title.romaji}
-                          className="w-12 h-16 rounded-lg object-cover flex-shrink-0"
-                        />
-                        <div className="flex-1 text-left min-w-0">
-                          <p className="text-white font-medium truncate group-hover:text-indigo-400 transition-colors">
-                            {anime.title.english || anime.title.romaji}
-                          </p>
-                          <div className="flex items-center gap-3 mt-1">
-                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor(anime.status)}`}>
-                              {formatStatus(anime.status)}
-                            </span>
-                            {anime.averageScore && (
-                              <span className="text-sm text-yellow-400 font-medium">
-                                ★ {formatScore(anime.averageScore)}
-                              </span>
-                            )}
-                            {anime.format && (
-                              <span className="text-xs text-gray-500">{anime.format}</span>
-                            )}
-                          </div>
-                        </div>
-                        <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400 transition-colors flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </a>
-                    ))
-                  ) : (
-                    <div className="p-8 text-center">
-                      <p className="text-gray-500">No anime found for &quot;{searchQuery}&quot;</p>
-                    </div>
-                  )}
-                </div>
-              )}
+              
+              <h1 className="text-5xl sm:text-6xl lg:text-7xl font-black tracking-tight leading-tight">
+                <span className="gradient-text">Your Ultimate</span>
+                <br />
+                <span className="text-white">Anime Destination</span>
+              </h1>
+              
+              <p className="text-lg sm:text-xl text-gray-400 max-w-xl mx-auto leading-relaxed">
+                Browse trending anime, discover new series, and stream episodes directly in your browser with torrent-powered playback.
+              </p>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
-      {/* Trending Section */}
+
+
+      {/* ── Latest Episodes ── */}
+      {!loading && latestEpisodes.length > 0 && (
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-16 mt-16">
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h2 className="text-2xl sm:text-3xl font-bold text-white flex items-center gap-3">
+                <span className="w-2 h-8 rounded-full bg-gradient-to-b from-cyan-400 to-blue-600 inline-block" />
+                Latest Episodes
+              </h2>
+              <p className="text-gray-500 mt-1 ml-5">Recently aired episodes</p>
+            </div>
+          </div>
+          <div className="episode-grid">
+            {latestEpisodes.map((anime) => (
+              <EpisodeCard key={anime.id} anime={anime} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Trending Section ── */}
       <section id="trending" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-16">
         <div className="flex items-center justify-between mb-8">
           <div>
@@ -201,7 +147,7 @@ export default function HomePage() {
         )}
       </section>
 
-      {/* Popular Section */}
+      {/* ── Popular Section ── */}
       <section id="popular" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-16">
         <div className="flex items-center justify-between mb-8">
           <div>
@@ -232,7 +178,7 @@ export default function HomePage() {
         )}
       </section>
 
-      {/* Currently Airing Section */}
+      {/* ── Airing Section ── */}
       <section id="airing" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-16">
         <div className="flex items-center justify-between mb-8">
           <div>
@@ -266,7 +212,290 @@ export default function HomePage() {
   );
 }
 
-/* ─── Components ─── */
+/* ═══════════════════════════════════════
+   Hero Slideshow
+   ═══════════════════════════════════════ */
+
+function HeroSlideshow({ slides }: { slides: AnimeCardData[] }) {
+  const [current, setCurrent] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval>>();
+
+  const goTo = useCallback((index: number) => {
+    setCurrent(index);
+  }, []);
+
+  const goNext = useCallback(() => {
+    setCurrent((prev) => (prev + 1) % slides.length);
+  }, [slides.length]);
+
+  // Auto-rotate
+  useEffect(() => {
+    if (isPaused || slides.length <= 1) return;
+    intervalRef.current = setInterval(goNext, 5000);
+    return () => clearInterval(intervalRef.current);
+  }, [isPaused, goNext, slides.length]);
+
+  const slide = slides[current];
+  if (!slide) return null;
+
+  const title = slide.title.english || slide.title.romaji;
+  const cleanDescription = slide.description
+    ? slide.description.replace(/<[^>]+>/g, '').slice(0, 280)
+    : '';
+
+  return (
+    <section
+      className="group/section relative w-full h-[70vh] min-h-[500px] max-h-[700px] overflow-hidden"
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
+    >
+      {/* Background image */}
+      {slides.map((s, i) => (
+        <div
+          key={s.id}
+          className={`absolute inset-0 transition-all duration-1000 ease-in-out ${
+            i === current ? 'opacity-100 scale-100' : 'opacity-0 scale-105'
+          }`}
+        >
+          <img
+            src={s.bannerImage!}
+            alt=""
+            className="w-full h-full object-cover"
+          />
+        </div>
+      ))}
+
+      {/* Gradient overlays */}
+      <div className="absolute inset-0 bg-gradient-to-r from-[rgb(10,10,26)] via-[rgb(10,10,26)/70] to-[rgb(10,10,26)/20]" />
+      <div className="absolute inset-0 bg-gradient-to-t from-[rgb(10,10,26)] via-transparent to-transparent" />
+      <div className="absolute inset-0 bg-gradient-to-b from-[rgb(10,10,26)/40] via-transparent to-[rgb(10,10,26)/60]" />
+
+      {/* Content */}
+      <div className="relative h-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col justify-center">
+        <div key={current} className="max-w-2xl animate-hero-in">
+          {/* Tags */}
+          <div className="flex items-center gap-3 mb-4">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-semibold border border-indigo-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              Now Airing
+            </span>
+            {slide.averageScore && (
+              <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-yellow-500/20 text-yellow-300 text-xs font-semibold border border-yellow-500/30">
+                ★ {formatScore(slide.averageScore)}
+              </span>
+            )}
+          </div>
+
+          {/* Title */}
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black text-white mb-4 leading-tight tracking-tight">
+            {title}
+          </h1>
+
+          {/* Meta */}
+          <div className="flex flex-wrap items-center gap-3 mb-5 text-sm text-gray-400">
+            {slide.format && (
+              <span className="px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-gray-300 font-medium">
+                {slide.format}
+              </span>
+            )}
+            {slide.episodes && (
+              <span>{slide.episodes} Episodes</span>
+            )}
+            {slide.season && slide.seasonYear && (
+              <span>{slide.season} {slide.seasonYear}</span>
+            )}
+          </div>
+
+          {/* Description */}
+          {cleanDescription && (
+            <p className="text-base sm:text-lg text-gray-300 mb-6 line-clamp-3 leading-relaxed">
+              {cleanDescription}
+            </p>
+          )}
+
+          {/* Genres */}
+          {slide.genres && slide.genres.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-8">
+              {slide.genres.slice(0, 4).map((genre) => (
+                <span
+                  key={genre}
+                  className="px-3 py-1 rounded-full text-xs font-medium bg-white/5 text-gray-400 border border-white/10"
+                >
+                  {genre}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* CTA Buttons */}
+          <div className="flex flex-wrap gap-4">
+            <a
+              href={`/anime/${slide.id}`}
+              className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl font-bold text-white transition-all duration-300"
+              style={{
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = '0 8px 25px rgba(99, 102, 241, 0.4)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = '';
+                e.currentTarget.style.boxShadow = '';
+              }}
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              Watch Now
+            </a>
+            <a
+              href={`/anime/${slide.id}`}
+              className="inline-flex items-center gap-2 px-8 py-3.5 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 transition-all border border-white/10 backdrop-blur-sm"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              More Info
+            </a>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom gradient fade */}
+      <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-[rgb(10,10,26)] to-transparent pointer-events-none" />
+
+      {/* Navigation Dots */}
+      {slides.length > 1 && (
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 z-10">
+          {slides.map((s, i) => (
+            <button
+              key={s.id}
+              onClick={() => goTo(i)}
+              className={`transition-all duration-300 rounded-full ${
+                i === current
+                  ? 'w-8 h-2 bg-indigo-500'
+                  : 'w-2 h-2 bg-white/30 hover:bg-white/50'
+              }`}
+              aria-label={`Go to slide ${i + 1}`}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Side arrows */}
+      {slides.length > 1 && (
+        <>
+          <button
+            onClick={() => setCurrent((prev) => (prev - 1 + slides.length) % slides.length)}
+            className="absolute left-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-sm flex items-center justify-center text-white transition-all z-10 opacity-0 group-hover/section:opacity-100"
+            aria-label="Previous slide"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => setCurrent((prev) => (prev + 1) % slides.length)}
+            className="absolute right-4 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 hover:bg-black/60 backdrop-blur-sm flex items-center justify-center text-white transition-all z-10 opacity-0 group-hover/section:opacity-100"
+            aria-label="Next slide"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </>
+      )}
+    </section>
+  );
+}
+
+/* ═══════════════════════════════════════
+   Episode Card
+   ═══════════════════════════════════════ */
+
+function EpisodeCard({ anime }: { anime: AnimeCardData }) {
+  const episode = anime.nextAiringEpisode!;
+  const title = anime.title.english || anime.title.romaji;
+  const timeUntilAiring = episode.timeUntilAiring;
+
+  // Format the time
+  const formatTime = (seconds: number) => {
+    if (seconds <= 0) return 'Airing now';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    return `${days}d ${hours}h`;
+  };
+
+  // Absolute date
+  const airDate = new Date(episode.airingAt * 1000);
+  const formattedDate = airDate.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const isRecent = timeUntilAiring < 86400; // Less than 24h away
+
+  return (
+    <a
+      href={`/anime/${anime.id}`}
+      className="group relative flex items-center gap-4 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] hover:border-indigo-500/30 transition-all duration-300"
+    >
+      {/* Cover */}
+      <div className="relative w-16 h-20 sm:w-20 sm:h-24 rounded-lg overflow-hidden flex-shrink-0">
+        <img
+          src={anime.coverImage}
+          alt={title}
+          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+        <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] font-bold text-white bg-indigo-500/80 px-1.5 py-0.5 rounded">
+          EP {episode.episode}
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <h3 className="text-white font-semibold text-sm sm:text-base truncate group-hover:text-indigo-400 transition-colors">
+          {title}
+        </h3>
+        <div className="flex items-center gap-2 mt-1.5">
+          <span className={`text-xs font-medium ${statusColor(anime.status)}`}>
+            {formatStatus(anime.status)}
+          </span>
+          <span className="text-xs text-gray-600">·</span>
+          <span className="text-xs text-gray-500">{anime.format}</span>
+        </div>
+        <div className="flex items-center gap-2 mt-2">
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
+            isRecent
+              ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+              : 'bg-white/5 text-gray-400 border border-white/10'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isRecent ? 'bg-green-400 animate-pulse' : 'bg-gray-500'}`} />
+            {timeUntilAiring <= 0 ? 'Now' : formatTime(timeUntilAiring)}
+          </span>
+          <span className="text-xs text-gray-500">{formattedDate}</span>
+        </div>
+      </div>
+
+      {/* Arrow */}
+      <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400 transition-colors flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+      </svg>
+    </a>
+  );
+}
+
+/* ═══════════════════════════════════════
+   Original Components (unchanged)
+   ═══════════════════════════════════════ */
 
 function AnimeCard({ anime, index }: { anime: AnimeCardData; index: number }) {
   const isAiring = anime.nextAiringEpisode;

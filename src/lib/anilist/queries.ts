@@ -309,13 +309,14 @@ export async function searchAnime(search: string, page: number = 1, perPage: num
   };
 }
 
-export async function getAnimeDetail(id: number): Promise<AnimeDetailData> {
-  const data = await fetchGraphQL<{ Media: AniListMedia }>(
+export async function getAnimeDetail(id: number): Promise<AnimeDetailData | null> {
+  const data = await fetchGraphQL<{ Media: AniListMedia | null }>(
     DETAIL_QUERY,
     { id }
   );
 
   const media = data.Media;
+  if (!media) return null;
   
   // Ensure airingSchedule is properly handled
   const airingSchedule: AiringEpisode[] = media.airingSchedule?.nodes || [];

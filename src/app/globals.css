@@ -197,6 +197,50 @@ body {
   }
 }
 
+/* Episode grid */
+.episode-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 640px) {
+  .episode-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .episode-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Hero slide entrance animation */
+.animate-hero-in {
+  animation: heroIn 0.8s ease forwards;
+}
+
+@keyframes heroIn {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Episode card hover */
+.episode-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.episode-card:hover {
+  transform: translateY(-2px);
+}
+
 /* Grid layout */
 .anime-grid {
   display: grid;

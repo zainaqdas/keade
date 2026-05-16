@@ -30,6 +30,13 @@ export async function GET(
     }
 
     const data = await getAnimeDetail(id);
+
+    if (!data) {
+      return NextResponse.json(
+        { error: 'Anime not found' },
+        { status: 404 }
+      );
+    }
     
     setCachedAnime(id, JSON.stringify(data));
 

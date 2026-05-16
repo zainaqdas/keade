@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { NyaaTorrent } from '@/lib/types';
-import { extractEpisodeNumber } from './parser';
+import { extractEpisodeNumber, isBatchTorrent } from './parser';
 
 const BASE_URL = 'https://nyaa.si';
 
@@ -106,6 +106,56 @@ export async function searchTorrents(
     torrents: allTorrents.slice(0, maxResults),
     totalPages,
   };
+}
+
+export async function searchTorrentsByEpisode(
+  animeTitle: string,
+  episode: number,
+  synonyms: string[] = []
+): Promise<NyaaTorrent[]> {
+  const seenHashes = new Set<string>();
+  const results: NyaaTorrent[] = [];
+
+  // Build targeted search queries for this specific episode
+  const titles = [animeTitle, ...synonyms.slice(0, 3)];
+  
+  for (const title of titles) {
+    const cleanTitle = title
+      .replace(/[!@#$%^&*(),.?":{}|<>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleanTitle) continue;
+
+    // Try different query formats
+    const queries = [
+      `${cleanTitle} ${episode}`,
+      `${cleanTitle} Episode ${episode}`,
+      `${cleanTitle} - ${episode}`,
+    ];
+
+    for (const q of queries) {
+      try {
+        const { torrents } = await searchTorrents(q, { maxResults: 30 });
+        
+        for (const torrent of torrents) {
+          if (!seenHashes.has(torrent.hash)) {
+            seenHashes.add(torrent.hash);
+            // Verify the episode number matches
+            const ep = torrent.episode ?? extractEpisodeNumber(torrent.name);
+            if (ep === episode && !isBatchTorrent(torrent.name)) {
+              results.push(torrent);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`Episode search failed for "${q}":`, error);
+      }
+    }
+
+    if (results.length > 0) break; // Found results for this title, stop trying
+  }
+
+  return results;
 }
 
 export async function searchTorrentsByAnime(
