@@ -73,17 +73,17 @@ export default function HomePage() {
             <div className="text-center max-w-3xl mx-auto space-y-6">
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-light text-sm text-gray-400">
                 <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                Discover & Stream Anime
+                Stream from Torrents
               </div>
               
               <h1 className="text-5xl sm:text-6xl lg:text-7xl font-black tracking-tight leading-tight">
                 <span className="gradient-text">Your Ultimate</span>
                 <br />
-                <span className="text-white">Anime Destination</span>
+                <span className="text-white">Torrent Destination</span>
               </h1>
               
               <p className="text-lg sm:text-xl text-gray-400 max-w-xl mx-auto leading-relaxed">
-                Browse trending anime, discover new series, and stream episodes directly in your browser with torrent-powered playback.
+                Browse trending anime, discover new series, and stream episodes directly in your browser with peer-to-peer torrent-powered playback.
               </p>
             </div>
           </div>

@@ -53,11 +53,24 @@ export default function Navbar() {
         <div className="flex items-center justify-between h-16 gap-4">
           {/* Logo */}
           <a href="/" className="flex items-center gap-3 group flex-shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white text-lg group-hover:scale-110 transition-transform">
-              A
+            <div className="relative w-9 h-9">
+              <svg className="w-full h-full" viewBox="0 0 36 36" fill="none">
+                <rect x="2" y="2" width="32" height="32" rx="8" fill="url(#navGrad)" />
+                <path d="M12 11h12v2.5h-5v10h-2.5v-10h-4.5V11z" fill="#0a0a1a" />
+                <circle cx="24" cy="24" r="3.5" fill="#fff" opacity="0.35" />
+                <defs>
+                  <linearGradient id="navGrad" x1="0" y1="0" x2="36" y2="36">
+                    <stop stopColor="#818cf8" />
+                    <stop offset="1" stopColor="#a855f7" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-white/10 border border-white/20 flex items-center justify-center">
+                <div className="w-1.5 h-1.5 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500" />
+              </div>
             </div>
-            <span className="text-xl font-bold gradient-text hidden sm:block">
-              AnimeStream
+            <span className="text-xl font-bold gradient-text hidden sm:block tracking-tight">
+              Torrinto
             </span>
           </a>
 

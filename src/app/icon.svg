@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <rect width="100" height="100" rx="20" fill="#0a0a1a" />
+  <!-- Outer ring -->
+  <rect x="3" y="3" width="94" height="94" rx="17" fill="none" stroke="url(#grad)" stroke-width="4" />
+  <!-- Stylized "T" letter -->
+  <path d="M30 30h40v8H56v32h-8V38H30z" fill="#ffffff" />
+  <!-- Torrent seed/magnet dot accent -->
+  <circle cx="70" cy="70" r="8" fill="url(#grad)" />
+  <path d="M67 70h6M70 67v6" stroke="#0a0a1a" stroke-width="2" stroke-linecap="round" />
+</svg>
