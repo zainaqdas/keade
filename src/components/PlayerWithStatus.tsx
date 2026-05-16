@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 interface PlayerWithStatusProps {
   magnet: string;
@@ -10,6 +10,19 @@ interface PlayerWithStatusProps {
   torrentName: string;
 }
 
+// Types for the Webtor SDK queue API
+declare global {
+  interface Window {
+    webtor?: {
+      push: (config: Record<string, unknown>) => void;
+      TORRENT_ERROR?: string;
+    }[] & {
+      push: (config: Record<string, unknown>) => void;
+      TORRENT_ERROR?: string;
+    };
+  }
+}
+
 export default function PlayerWithStatus({
   magnet,
   poster,
@@ -17,76 +30,177 @@ export default function PlayerWithStatus({
   onClose,
   torrentName,
 }: PlayerWithStatusProps) {
+  const [mode, setMode] = useState<'sdk' | 'iframe'>('sdk');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [loadTimeout, setLoadTimeout] = useState(false);
+  const [fallbackTimer, setFallbackTimer] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const embedUrl = `https://webtor.io/show?magnet=${encodeURIComponent(magnet)}`;
 
+  // ── SDK Player Initialisation ──
   useEffect(() => {
-    // If iframe doesn't load within 30s, show a warning but don't block
+    setMode('sdk');
+    setLoading(true);
+    setError(null);
+    setFallbackTimer(false);
+
+    // Clear previous SDK container
+    const container = document.getElementById('webtor-sdk-container');
+    if (container) container.innerHTML = '';
+
+    // Initialise the SDK queue
+    window.webtor = window.webtor || ([] as unknown as Window['webtor']);
+    (window.webtor as unknown as any[]).push({
+      id: 'webtor-sdk-container',
+      magnet: magnet,
+      lang: 'en',
+      poster: poster || undefined,
+      title: title || undefined,
+      on: (e: { name: string }) => {
+        console.debug('[Webtor SDK event]', e.name, e);
+        if (e.name === 'error' || e.name === (window.webtor as any)?.TORRENT_ERROR) {
+          console.warn('[Webtor SDK] torrent error', e);
+        }
+      },
+    });
+
+    // 15s fallback timer: if SDK didn't render a player, switch to iframe
+    fallbackTimeoutRef.current = setTimeout(() => {
+      setFallbackTimer(true);
+      const el = document.getElementById('webtor-sdk-container');
+      // If the SDK hasn't injected any child elements, it likely failed
+      if (!el || el.children.length === 0) {
+        console.info('[Player] SDK did not render — switching to iframe proxy');
+        if (el) el.innerHTML = '';
+        setMode('iframe');
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      } else {
+        // SDK rendered — player is ready
+        setLoading(false);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      }
+    }, 15_000);
+
+    // Overall timeout (45s total) for iframe mode
     timeoutRef.current = setTimeout(() => {
-      setLoadTimeout(true);
-    }, 30_000);
+      if (loading) {
+        setError('Connection timed out. The torrent may have few seeders.');
+        setLoading(false);
+      }
+    }, 45_000);
 
     return () => {
+      if (fallbackTimeoutRef.current) clearTimeout(fallbackTimeoutRef.current);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      const el = document.getElementById('webtor-sdk-container');
+      if (el) el.innerHTML = '';
     };
-  }, [magnet]);
+    // Magnet is stable across remounts due to `key={torrent.hash}` on the parent
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [magnet, poster, title]);
+
+  // ── Iframe event handlers ──
+  const handleIframeLoad = useCallback(() => {
+    setLoading(false);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+
+  const handleIframeError = useCallback(() => {
+    setError('Failed to load the video player.');
+    setLoading(false);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
+
+  // ── Render ──
+  const transitioning = mode === 'iframe' && fallbackTimer;
 
   return (
     <section className="glass rounded-2xl p-4">
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-bold text-white">Now Playing</h2>
-          {loading && !error && (
+          {/* SDK loading badge */}
+          {loading && !error && mode === 'sdk' && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-indigo-500/15 text-indigo-400">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+              </span>
+              P2P
+            </span>
+          )}
+          {/* Iframe loading badge */}
+          {loading && !error && mode === 'iframe' && (
             <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-yellow-500/15 text-yellow-400">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-yellow-500" />
               </span>
-              Loading...
+              Proxy
             </span>
           )}
+          {/* Success badge */}
+          {!loading && !error && (
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-green-500/15 text-green-400">
+              {mode === 'sdk' ? 'P2P' : 'Proxy'}
+            </span>
+          )}
+          {/* Error badge */}
           {error && (
             <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-500/15 text-red-400">
               Error
             </span>
           )}
+          {/* Transitioning indicator */}
+          {transitioning && (
+            <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-400">
+              Fallback
+            </span>
+          )}
         </div>
-        <button
-          onClick={onClose}
-          className="text-xs text-gray-500 hover:text-white transition-colors px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10"
-        >
-          Close
-        </button>
+        <div className="flex items-center gap-2">
+          {mode === 'iframe' && !loading && !error && (
+            <span className="text-[10px] text-gray-600">Fallback · Iframe</span>
+          )}
+          <button
+            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-white transition-colors px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10"
+          >
+            Close
+          </button>
+        </div>
       </div>
 
-      {/* Player Container */}
+      {/* ── Player Container ── */}
       <div className="relative rounded-xl overflow-hidden bg-black border border-white/5">
-        {/* Iframe Player */}
         <div className="w-full" style={{ minHeight: '360px', maxHeight: '540px' }}>
-          <iframe
-            src={embedUrl}
-            title="Video Player"
-            className="w-full h-full border-0"
-            style={{ minHeight: '360px', maxHeight: '540px' }}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
-            allowFullScreen
-            onLoad={() => {
-              setLoading(false);
-              if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            }}
-            onError={() => {
-              setError('Failed to load the video player.');
-              setLoading(false);
-              if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            }}
-          />
+          {/* SDK Container (primary) — only in DOM when active */}
+          {mode === 'sdk' && (
+            <div
+              id="webtor-sdk-container"
+              className="webtor w-full h-full"
+              style={{ minHeight: '360px', maxHeight: '540px' }}
+            />
+          )}
 
-          {/* Loading Overlay */}
+          {/* Iframe (fallback) */}
+          {mode === 'iframe' && (
+            <iframe
+              src={embedUrl}
+              title="Video Player"
+              className="w-full h-full border-0"
+              style={{ minHeight: '360px', maxHeight: '540px' }}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+              allowFullScreen
+              onLoad={handleIframeLoad}
+              onError={handleIframeError}
+            />
+          )}
+
+          {/* ── Loading Overlay ── */}
           {loading && !error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0a1a]/90 backdrop-blur-sm z-10">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-purple-600/20 border border-indigo-500/20 flex items-center justify-center mb-5">
@@ -95,19 +209,30 @@ export default function PlayerWithStatus({
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
               </div>
-              <p className="text-white font-semibold text-sm mb-2">Loading Webtor Player...</p>
-              <p className="text-gray-500 text-xs text-center max-w-sm">
-                Connecting to torrent network via Webtor.io proxy.
-              </p>
-              {loadTimeout && (
-                <p className="text-yellow-500 text-xs text-center max-w-sm mt-3">
-                  This is taking longer than expected. The torrent may have few seeders or your browser may be blocking third-party content.
-                </p>
+              {mode === 'sdk' ? (
+                <>
+                  <p className="text-white font-semibold text-sm mb-1">Connecting P2P Network...</p>
+                  <p className="text-gray-500 text-xs text-center max-w-sm">
+                    Attempting peer-to-peer connection via WebTorrent — no proxy required.
+                  </p>
+                  {fallbackTimer && (
+                    <p className="text-amber-400 text-xs text-center max-w-sm mt-3">
+                      Falling back to proxy mode…
+                    </p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="text-white font-semibold text-sm mb-1">Connecting via Proxy...</p>
+                  <p className="text-gray-500 text-xs text-center max-w-sm">
+                    Using Webtor.io proxy server to fetch the torrent.
+                  </p>
+                </>
               )}
             </div>
           )}
 
-          {/* Error Overlay */}
+          {/* ── Error Overlay ── */}
           {error && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0a1a]/90 backdrop-blur-sm z-10">
               <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-4">
@@ -133,13 +258,13 @@ export default function PlayerWithStatus({
         </div>
       </div>
 
-      {/* Torrent Info */}
+      {/* ── Torrent Info ── */}
       <div className="flex items-center justify-between mt-2">
         <p className="text-xs text-gray-500 truncate flex-1 mr-4" title={torrentName}>
           {torrentName}
         </p>
         <p className="text-[10px] text-gray-600 whitespace-nowrap">
-          {loading ? 'Connecting...' : error ? 'Failed' : 'Streaming'} · Powered by Webtor.io
+          {loading ? 'Connecting…' : error ? 'Failed' : mode === 'sdk' ? 'P2P' : 'Proxy'} · Webtor.io
         </p>
       </div>
     </section>

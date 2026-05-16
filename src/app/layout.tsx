@@ -16,7 +16,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js" defer />
+        <script src="https://cdn.jsdelivr.net/npm/@webtor/embed-sdk-js/dist/index.min.js" charSet="utf-8" async />
       </head>
       <body className="min-h-screen bg-[#0a0a1a]">
         <Navbar />
