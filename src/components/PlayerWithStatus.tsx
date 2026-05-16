@@ -8,6 +8,8 @@ interface PlayerWithStatusProps {
   title?: string;
   onClose: () => void;
   torrentName: string;
+  /** Force iframe mode — skip the WebTor P2P SDK. Use for batch torrents. */
+  forceIframe?: boolean;
 }
 
 // Types for the Webtor SDK queue API
@@ -29,8 +31,9 @@ export default function PlayerWithStatus({
   title,
   onClose,
   torrentName,
+  forceIframe = false,
 }: PlayerWithStatusProps) {
-  const [mode, setMode] = useState<'sdk' | 'iframe'>('sdk');
+  const [mode, setMode] = useState<'sdk' | 'iframe'>(forceIframe ? 'iframe' : 'sdk');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fallbackTimer, setFallbackTimer] = useState(false);
@@ -39,16 +42,35 @@ export default function PlayerWithStatus({
 
   const embedUrl = `https://webtor.io/show?magnet=${encodeURIComponent(magnet)}`;
 
-  // ── SDK Player Initialisation ──
+  // ── Player Initialisation ──
   useEffect(() => {
+    // Clear previous SDK container
+    const container = document.getElementById('webtor-sdk-container');
+    if (container) container.innerHTML = '';
+
+    if (forceIframe) {
+      // Force iframe mode — skip SDK entirely (used for batch torrents)
+      setMode('iframe');
+      setLoading(true);
+      setError(null);
+      setFallbackTimer(false);
+
+      // Overall timeout (45s) for iframe
+      timeoutRef.current = setTimeout(() => {
+        setError('Connection timed out. The torrent may have few seeders.');
+        setLoading(false);
+      }, 45_000);
+
+      return () => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      };
+    }
+
+    // ── SDK mode (default for single episodes) ──
     setMode('sdk');
     setLoading(true);
     setError(null);
     setFallbackTimer(false);
-
-    // Clear previous SDK container
-    const container = document.getElementById('webtor-sdk-container');
-    if (container) container.innerHTML = '';
 
     // Initialise the SDK queue
     window.webtor = window.webtor || ([] as unknown as Window['webtor']);
@@ -97,9 +119,7 @@ export default function PlayerWithStatus({
       const el = document.getElementById('webtor-sdk-container');
       if (el) el.innerHTML = '';
     };
-    // Magnet is stable across remounts due to `key={torrent.hash}` on the parent
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [magnet, poster, title]);
+  }, [magnet, poster, title, forceIframe]);
 
   // ── Iframe event handlers ──
   const handleIframeLoad = useCallback(() => {

@@ -285,6 +285,7 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
                   poster={anime.coverImage}
                   title={anime.title.english || anime.title.romaji}
                   torrentName={playingTorrent.name}
+                  forceIframe={isBatchTorrent(playingTorrent.name)}
                   onClose={() => {
                     setPlayingTorrent(null);
                     setPlayerVisible(false);
