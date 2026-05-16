@@ -53,7 +53,7 @@ export default function HomePage() {
   const latestEpisodes = airing
     .filter((a) => a.nextAiringEpisode)
     .sort((a, b) => (a.nextAiringEpisode?.timeUntilAiring ?? 999999) - (b.nextAiringEpisode?.timeUntilAiring ?? 999999))
-    .slice(0, 15);
+    .slice(0, 10);
 
   return (
     <div className="min-h-screen">
@@ -104,10 +104,12 @@ export default function HomePage() {
               <p className="text-gray-500 mt-1 ml-5">Recently aired episodes</p>
             </div>
           </div>
-          <div className="episode-grid">
-            {latestEpisodes.map((anime) => (
-              <EpisodeCard key={anime.id} anime={anime} />
-            ))}
+          <div className="glass rounded-2xl p-5 border border-white/5">
+            <div className="episode-grid">
+              {latestEpisodes.map((anime) => (
+                <EpisodeCard key={anime.id} anime={anime} />
+              ))}
+            </div>
           </div>
         </section>
       )}
@@ -442,6 +444,11 @@ function EpisodeCard({ anime }: { anime: AnimeCardData }) {
 
   const isRecent = timeUntilAiring < 86400; // Less than 24h away
 
+  // Clean description for popover
+  const cleanDesc = anime.description
+    ? anime.description.replace(/<[^>]+>/g, '').slice(0, 160)
+    : null;
+
   return (
     <a
       href={`/anime/${anime.id}`}
@@ -489,6 +496,61 @@ function EpisodeCard({ anime }: { anime: AnimeCardData }) {
       <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400 transition-colors flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
       </svg>
+
+      {/* ── Hover Overlay Popover ── */}
+      <div className="absolute inset-0 z-50 rounded-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none">
+        <div className="h-full rounded-xl overflow-hidden bg-[#16162a] border border-white/10 shadow-2xl shadow-black/60">
+          <div className="h-full p-3 flex flex-col justify-between">
+            {/* Top: Title + Genres */}
+            <div>
+              <p className="text-white font-bold text-xs leading-tight line-clamp-1">{title}</p>
+              {anime.title.native && (
+                <p className="text-gray-400 text-[10px] mt-0.5 line-clamp-1">{anime.title.native}</p>
+              )}
+              {anime.genres && anime.genres.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {anime.genres.slice(0, 3).map((g) => (
+                    <span key={g} className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/[0.06] text-gray-300">
+                      {g}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* Bottom: Meta + Score */}
+            <div className="space-y-1.5">
+              {cleanDesc && (
+                <p className="text-[10px] text-gray-400 leading-relaxed line-clamp-2">
+                  {cleanDesc}
+                </p>
+              )}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {anime.averageScore && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 text-[9px] font-semibold">
+                    ★ {formatScore(anime.averageScore)}
+                  </span>
+                )}
+                <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-gray-400 text-[9px]">
+                  EP {episode.episode}
+                </span>
+                {anime.format && (
+                  <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-gray-400 text-[9px]">
+                    {anime.format}
+                  </span>
+                )}
+              </div>
+              <div className="pt-0.5">
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-indigo-400">
+                  View Details
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </a>
   );
 }
@@ -562,6 +624,8 @@ function AnimeCard({ anime, index }: { anime: AnimeCardData; index: number }) {
           ))}
         </div>
       </div>
+
+      <HoverPopover anime={anime} />
     </a>
   );
 }
@@ -615,7 +679,83 @@ function AnimeGridCard({ anime, index }: { anime: AnimeCardData; index: number }
       <div className="mt-2 px-0.5">
         <p className="text-white font-medium text-xs leading-tight truncate">{title}</p>
       </div>
+
+      <HoverPopover anime={anime} />
     </a>
+  );
+}
+
+/* ═══════════════════════════════════════
+   Hover Popover (used by AnimeCard & AnimeGridCard)
+   ═══════════════════════════════════════ */
+
+function HoverPopover({ anime }: { anime: AnimeCardData }) {
+  const title = anime.title.english || anime.title.romaji;
+  const cleanDesc = anime.description
+    ? anime.description.replace(/<[^>]+>/g, '').slice(0, 160)
+    : null;
+
+  return (
+    <div className="absolute inset-0 z-50 rounded-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 pointer-events-none">
+      <div className="h-full rounded-2xl overflow-hidden bg-[#16162a] border border-white/10 shadow-2xl shadow-black/60">
+        <div className="h-full p-3.5 flex flex-col justify-between">
+          {/* Top: Title + Genres */}
+          <div>
+            <p className="text-white font-bold text-sm leading-tight line-clamp-2">{title}</p>
+            {anime.title.native && (
+              <p className="text-gray-400 text-[10px] mt-0.5 line-clamp-1">{anime.title.native}</p>
+            )}
+            {anime.genres && anime.genres.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-2">
+                {anime.genres.slice(0, 3).map((g) => (
+                  <span key={g} className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-white/[0.06] text-gray-300">
+                    {g}
+                  </span>
+                ))}
+              </div>
+            )}
+            {cleanDesc && (
+              <p className="text-[10px] text-gray-400 leading-relaxed line-clamp-3 mt-2">
+                {cleanDesc}
+              </p>
+            )}
+          </div>
+          {/* Bottom: Meta + CTA */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {anime.averageScore && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 text-[9px] font-semibold">
+                  ★ {formatScore(anime.averageScore)}
+                </span>
+              )}
+              {anime.episodes && (
+                <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-gray-400 text-[9px]">
+                  {anime.episodes} EP
+                </span>
+              )}
+              {anime.format && (
+                <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-gray-400 text-[9px]">
+                  {anime.format}
+                </span>
+              )}
+              {anime.season && anime.seasonYear && (
+                <span className="px-1.5 py-0.5 rounded bg-white/[0.05] text-gray-400 text-[9px]">
+                  {anime.season} {anime.seasonYear}
+                </span>
+              )}
+            </div>
+            <div className="pt-1.5 border-t border-white/5">
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-indigo-400">
+                View Details
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
