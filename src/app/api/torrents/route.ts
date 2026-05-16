@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { searchTorrentsByAnime, searchTorrentsByEpisode } from '@/lib/nyaa/scraper';
+import { searchTorrentsByAnime, searchTorrentsByEpisode, searchTorrentsByBatch } from '@/lib/nyaa/scraper';
 import { getCachedTorrents, setCachedTorrents, isCacheValid } from '@/lib/db';
 
 export async function GET(request: NextRequest) {
@@ -7,8 +7,12 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const query = searchParams.get('q') || '';
     const episodeParam = searchParams.get('episode') || '';
+    const batchParam = searchParams.get('batch') || '';
     const bypassCache = searchParams.get('nocache') === 'true';
     const synonymsParam = searchParams.get('synonyms') || '';
+    const seasonYearParam = searchParams.get('seasonYear') || '';
+    const startYearParam = searchParams.get('startYear') || '';
+    const totalEpisodesParam = searchParams.get('totalEpisodes') || '';
 
     if (!query.trim()) {
       return NextResponse.json(
@@ -18,8 +22,35 @@ export async function GET(request: NextRequest) {
     }
 
     const synonyms = synonymsParam ? synonymsParam.split(',').map(s => s.trim()) : [];
+    const seasonYear = seasonYearParam ? parseInt(seasonYearParam) : null;
+    const startYear = startYearParam ? parseInt(startYearParam) : null;
+    const totalEpisodes = totalEpisodesParam ? parseInt(totalEpisodesParam) : null;
 
-    // Episode-specific search (on-demand, targeted)
+    // Batch search (batch torrents only)
+    if (batchParam === 'true') {
+      const cacheKey = `batch_${query.toLowerCase()}`;
+
+      if (!bypassCache) {
+        const cached = getCachedTorrents(cacheKey);
+        if (isCacheValid(cached, 30 * 60 * 1000)) {
+          return NextResponse.json({
+            torrents: JSON.parse(cached!.data),
+            cached: true,
+          });
+        }
+      }
+
+      const torrents = await searchTorrentsByBatch(query, synonyms, seasonYear, startYear, totalEpisodes);
+      setCachedTorrents(cacheKey, JSON.stringify(torrents));
+
+      return NextResponse.json({
+        torrents,
+        cached: false,
+        total: torrents.length,
+      });
+    }
+
+    // Episode-specific search (on-demand, targeted, excludes batches)
     if (episodeParam) {
       const episode = parseInt(episodeParam);
       if (isNaN(episode) || episode < 1) {
@@ -42,7 +73,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      const torrents = await searchTorrentsByEpisode(query, episode, synonyms);
+      const torrents = await searchTorrentsByEpisode(query, episode, synonyms, seasonYear, startYear, totalEpisodes);
       setCachedTorrents(cacheKey, JSON.stringify(torrents));
 
       return NextResponse.json({
@@ -53,7 +84,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Full anime search (used for batch/initial load)
+    // Full anime search
     const cacheKey = `torrents_${query.toLowerCase()}`;
 
     if (!bypassCache) {

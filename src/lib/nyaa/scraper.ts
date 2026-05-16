@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { NyaaTorrent } from '@/lib/types';
-import { extractEpisodeNumber, isBatchTorrent } from './parser';
+import { extractEpisodeNumber, isBatchTorrent, isTorrentForAnime } from './parser';
 
 const BASE_URL = 'https://nyaa.si';
 
@@ -111,12 +111,16 @@ export async function searchTorrents(
 export async function searchTorrentsByEpisode(
   animeTitle: string,
   episode: number,
-  synonyms: string[] = []
+  synonyms: string[] = [],
+  seasonYear?: number | null,
+  startYear?: number | null,
+  totalEpisodes?: number | null
 ): Promise<NyaaTorrent[]> {
   const seenHashes = new Set<string>();
   const results: NyaaTorrent[] = [];
 
-  // Build targeted search queries for this specific episode
+  // Build targeted search queries for this specific episode.
+  // Include year in queries when available for season disambiguation.
   const titles = [animeTitle, ...synonyms.slice(0, 3)];
   
   for (const title of titles) {
@@ -126,12 +130,24 @@ export async function searchTorrentsByEpisode(
       .trim();
     if (!cleanTitle) continue;
 
-    // Try different query formats
-    const queries = [
+    // Try different query formats, including year-disambiguated ones
+    const queries: string[] = [];
+    
+    // Queries WITH year (more precise)
+    if (seasonYear) {
+      queries.push(
+        `${cleanTitle} ${seasonYear} ${episode}`,
+        `${cleanTitle} ${seasonYear} Episode ${episode}`,
+      );
+    }
+    
+    // Queries WITHOUT year (broader, fallback)
+    queries.push(
       `${cleanTitle} ${episode}`,
       `${cleanTitle} Episode ${episode}`,
       `${cleanTitle} - ${episode}`,
-    ];
+      `${cleanTitle} S01E${String(episode).padStart(2, '0')}`,
+    );
 
     for (const q of queries) {
       try {
@@ -143,16 +159,90 @@ export async function searchTorrentsByEpisode(
             // Verify the episode number matches
             const ep = torrent.episode ?? extractEpisodeNumber(torrent.name);
             if (ep === episode && !isBatchTorrent(torrent.name)) {
-              results.push(torrent);
+              // Season identity check: filter out torrents from wrong seasons
+              if (isTorrentForAnime(torrent.name, {
+                seasonYear,
+                startYear,
+                totalEpisodes,
+              })) {
+                results.push(torrent);
+              }
             }
           }
         }
       } catch (error) {
         console.warn(`Episode search failed for "${q}":`, error);
       }
+
+      if (results.length >= 5) break; // Got enough results for this query
     }
 
     if (results.length > 0) break; // Found results for this title, stop trying
+  }
+
+  return results;
+}
+
+export async function searchTorrentsByBatch(
+  animeTitle: string,
+  synonyms: string[] = [],
+  seasonYear?: number | null,
+  startYear?: number | null,
+  totalEpisodes?: number | null
+): Promise<NyaaTorrent[]> {
+  const seenHashes = new Set<string>();
+  const results: NyaaTorrent[] = [];
+
+  const titles = [animeTitle, ...synonyms.slice(0, 3)];
+
+  for (const title of titles) {
+    const cleanTitle = title
+      .replace(/[!@#$%^&*(),.?":{}|<>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleanTitle) continue;
+
+    const queries: string[] = [];
+    
+    // Year-disambiguated queries
+    if (seasonYear) {
+      queries.push(
+        `${cleanTitle} ${seasonYear} batch`,
+        `${cleanTitle} ${seasonYear} complete`,
+      );
+    }
+    
+    queries.push(
+      `${cleanTitle} batch`,
+      `${cleanTitle} complete`,
+      `${cleanTitle} full`,
+    );
+
+    for (const q of queries) {
+      try {
+        const { torrents } = await searchTorrents(q, { maxResults: 50 });
+        
+        for (const torrent of torrents) {
+          if (!seenHashes.has(torrent.hash)) {
+            seenHashes.add(torrent.hash);
+            if (isBatchTorrent(torrent.name)) {
+              // Also verify identity for batch torrents
+              if (isTorrentForAnime(torrent.name, {
+                seasonYear,
+                startYear,
+                totalEpisodes,
+              })) {
+                results.push(torrent);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`Batch search failed for "${q}":`, error);
+      }
+    }
+
+    if (results.length > 0) break;
   }
 
   return results;

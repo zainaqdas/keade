@@ -21,6 +21,11 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playerVisible, setPlayerVisible] = useState(false);
+  const [selectedQuality, setSelectedQuality] = useState<string>('all');
+  const [selectedAudio, setSelectedAudio] = useState<string>('all');
+  const [batchTorrents, setBatchTorrents] = useState<NyaaTorrent[]>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchExpanded, setBatchExpanded] = useState(false);
   const searchTermsRef = useRef<string>('');
 
   useEffect(() => {
@@ -37,11 +42,19 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
         const animeData = data.data as AnimeDetailData;
         setAnime(animeData);
 
-        // Build search terms once for later episode lookups
+        // Build search terms once for later episode lookups.
+        // Include season/year info from synonyms for better Nyaa disambiguation.
+        // Also generate a "Season N" variation if not already in synonyms.
+        const seasonYear = animeData.seasonYear;
+        const seasonStr = seasonYear ? String(seasonYear) : '';
+        const nameWithYear = animeData.title.english
+          ? `${animeData.title.english} ${seasonStr}`.trim()
+          : `${animeData.title.romaji} ${seasonStr}`.trim();
         const terms = [
+          nameWithYear,
           animeData.title.english,
           animeData.title.romaji,
-          ...animeData.synonyms.slice(0, 3),
+          ...animeData.synonyms.slice(0, 4),
         ].filter(Boolean).join(',');
         searchTermsRef.current = terms;
       } catch (err) {
@@ -67,9 +80,17 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
     try {
       const q = encodeURIComponent(anime?.title.romaji || '');
       const synonyms = encodeURIComponent(searchTermsRef.current);
-      const res = await fetch(`/api/torrents?q=${q}&synonyms=${synonyms}&episode=${episode}`);
+      const seasonYear = anime?.seasonYear || '';
+      const startYear = anime?.startDate?.year || '';
+      const totalEpisodes = anime?.episodes || '';
+      const res = await fetch(
+        `/api/torrents?q=${q}&synonyms=${synonyms}&episode=${episode}` +
+        `&seasonYear=${seasonYear}&startYear=${startYear}&totalEpisodes=${totalEpisodes}`
+      );
       const data = await res.json();
       setEpisodeTorrents(prev => ({ ...prev, [episode]: data.torrents || [] }));
+      setSelectedQuality('all');
+      setSelectedAudio('all');
     } catch (err) {
       console.error('Failed to fetch episode torrents:', err);
       setEpisodeTorrents(prev => ({ ...prev, [episode]: [] }));
@@ -85,6 +106,37 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
       document.getElementById('player-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 100);
   }, []);
+
+  const fetchBatchTorrents = useCallback(async () => {
+    if (batchTorrents.length > 0) {
+      setBatchExpanded(prev => !prev);
+      return;
+    }
+
+    setBatchLoading(true);
+    setBatchExpanded(true);
+    setSelectedQuality('all');
+    setSelectedAudio('all');
+
+    try {
+      const q = encodeURIComponent(anime?.title.romaji || '');
+      const synonyms = encodeURIComponent(searchTermsRef.current);
+      const seasonYear = anime?.seasonYear || '';
+      const startYear = anime?.startDate?.year || '';
+      const totalEpisodes = anime?.episodes || '';
+      const res = await fetch(
+        `/api/torrents?q=${q}&synonyms=${synonyms}&batch=true` +
+        `&seasonYear=${seasonYear}&startYear=${startYear}&totalEpisodes=${totalEpisodes}`
+      );
+      const data = await res.json();
+      setBatchTorrents(data.torrents || []);
+    } catch (err) {
+      console.error('Failed to fetch batch torrents:', err);
+      setBatchTorrents([]);
+    } finally {
+      setBatchLoading(false);
+    }
+  }, [anime, batchTorrents]);
 
   const handleCopyMagnet = useCallback(async (torrent: NyaaTorrent) => {
     try {
@@ -375,7 +427,7 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
                     </div>
                   )}
 
-                  {/* Selected Episode Torrent Results */}
+                  {/* Selected Episode Torrent Results with Quality Selector */}
                   {selectedEpisode !== null && (
                     <div className="mt-5">
                       <div className="flex items-center gap-3 mb-3">
@@ -405,17 +457,16 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
                           ))}
                         </div>
                       ) : episodeTorrents[selectedEpisode]?.length > 0 ? (
-                        <div className="rounded-2xl border border-white/5 overflow-hidden divide-y divide-white/5">
-                          {episodeTorrents[selectedEpisode].map((torrent) => (
-                            <TorrentItem
-                              key={torrent.hash}
-                              torrent={torrent}
-                              copiedHash={copiedHash}
-                              onPlay={handlePlay}
-                              onCopy={handleCopyMagnet}
-                            />
-                          ))}
-                        </div>
+                        <EpisodeTorrents
+                          torrents={episodeTorrents[selectedEpisode]}
+                          selectedQuality={selectedQuality}
+                          onQualityChange={setSelectedQuality}
+                          selectedAudio={selectedAudio}
+                          onAudioChange={setSelectedAudio}
+                          copiedHash={copiedHash}
+                          onPlay={handlePlay}
+                          onCopy={handleCopyMagnet}
+                        />
                       ) : (
                         <div className="text-center py-8 rounded-2xl bg-white/[0.02] border border-white/5">
                           <div className="text-3xl mb-2">🔍</div>
@@ -429,6 +480,87 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
                   )}
                 </>
               )}
+
+              {/* ─── Batch Disclaimer ─── */}
+              <div className="mt-8 p-4 rounded-2xl bg-gradient-to-r from-amber-500/5 via-amber-500/10 to-transparent border border-amber-500/15">
+                <div className="flex gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/15 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.33 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                  </div>
+                  <div className="text-xs sm:text-sm text-gray-400 leading-relaxed">
+                    <strong className="text-amber-400 font-semibold">Can't find specific episodes?</strong>
+                    {' '}Try using the{' '}
+                    <span className="text-purple-400 font-medium">Batch Downloads</span>
+                    {' '}section below instead. Batch torrents pack all episodes of a series into one torrent file.
+                    Once loaded in{' '}
+                    <span className="text-indigo-400 font-medium">WebTor</span>
+                    , you can browse through all episodes directly from the player and pick what you want to watch.
+                  </div>
+                </div>
+              </div>
+
+              {/* ─── Batch Downloads Section ─── */}
+              <section className="mt-5">
+                <button
+                  onClick={fetchBatchTorrents}
+                  className="flex items-center justify-between w-full group"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-500/15 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                    </div>
+                    <div className="text-left">
+                      <h2 className="text-lg font-bold text-white group-hover:text-indigo-400 transition-colors">
+                        Batch Downloads
+                      </h2>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {batchTorrents.length > 0
+                          ? `${batchTorrents.length} batch torrent${batchTorrents.length !== 1 ? 's' : ''} available`
+                          : 'Download complete series collections'
+                        }
+                      </p>
+                    </div>
+                  </div>
+                  <div className={`w-6 h-6 rounded-lg bg-white/5 flex items-center justify-center transition-transform ${batchExpanded ? 'rotate-180' : ''}`}>
+                    <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </button>
+
+                {batchExpanded && (
+                  <div className="mt-4">
+                    {batchLoading ? (
+                      <div className="space-y-2">
+                        {Array.from({ length: 3 }).map((_, i) => (
+                          <div key={i} className="h-16 rounded-xl shimmer" />
+                        ))}
+                      </div>
+                    ) : batchTorrents.length > 0 ? (
+                      <EpisodeTorrents
+                        torrents={batchTorrents}
+                        selectedQuality={selectedQuality}
+                        onQualityChange={setSelectedQuality}
+                        selectedAudio={selectedAudio}
+                        onAudioChange={setSelectedAudio}
+                        copiedHash={copiedHash}
+                        onPlay={handlePlay}
+                        onCopy={handleCopyMagnet}
+                      />
+                    ) : (
+                      <div className="text-center py-8 rounded-2xl bg-white/[0.02] border border-white/5">
+                        <div className="text-3xl mb-2">📦</div>
+                        <p className="text-gray-500 text-sm">No batch torrents found</p>
+                        <p className="text-gray-600 text-xs mt-1">Try searching with a different title or check Nyaa.si directly</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
             </section>
           </div>
 
@@ -497,6 +629,169 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
   );
 }
 
+/* ─── EpisodeTorrents: Quality Grouping ─── */
+
+function EpisodeTorrents({
+  torrents,
+  selectedQuality,
+  onQualityChange,
+  selectedAudio,
+  onAudioChange,
+  copiedHash,
+  onPlay,
+  onCopy,
+}: {
+  torrents: NyaaTorrent[];
+  selectedQuality: string;
+  onQualityChange: (q: string) => void;
+  selectedAudio: string;
+  onAudioChange: (a: string) => void;
+  copiedHash: string | null;
+  onPlay: (torrent: NyaaTorrent) => void;
+  onCopy: (torrent: NyaaTorrent) => void;
+}) {
+  // Group torrents by quality
+  const qualityGroups = torrents.reduce<Record<string, NyaaTorrent[]>>((acc, t) => {
+    const q = getQuality(t.name) || 'other';
+    if (!acc[q]) acc[q] = [];
+    acc[q].push(t);
+    return acc;
+  }, {});
+
+  const qualities = Object.keys(qualityGroups).sort((a, b) => {
+    const rank = (q: string) => {
+      const n = parseInt(q);
+      if (!isNaN(n)) return n;
+      return -1;
+    };
+    return rank(b) - rank(a);
+  });
+
+  // Auto-select best quality when 'all'
+  const displayQuality = selectedQuality === 'all' && qualities.length > 0
+    ? qualities[0]
+    : selectedQuality;
+
+  // Quality-filtered torrents
+  const qualityTorrents = displayQuality === 'all'
+    ? torrents
+    : qualityGroups[displayQuality] || [];
+
+  // Audio type groups within the selected quality
+  const audioGroups = qualityTorrents.reduce<Record<string, NyaaTorrent[]>>((acc, t) => {
+    const a = getAudioType(t.name);
+    if (!acc[a]) acc[a] = [];
+    acc[a].push(t);
+    return acc;
+  }, {} as Record<string, NyaaTorrent[]>);
+
+  const audioTypes = Object.keys(audioGroups).sort((a, b) => {
+    const order = ['sub', 'dual', 'dub'];
+    return order.indexOf(a) - order.indexOf(b);
+  });
+
+  // Audio-filtered torrents
+  const displayTorrents = selectedAudio === 'all'
+    ? qualityTorrents
+    : audioGroups[selectedAudio] || [];
+
+  // Count per type across ALL qualities (for the audio filter counts)
+  const totalAudioCounts = torrents.reduce<Record<string, number>>((acc, t) => {
+    const a = getAudioType(t.name);
+    acc[a] = (acc[a] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  return (
+    <div>
+      {/* Audio Tabs (primary filter) */}
+      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+        {audioTypes.length > 1 && (
+          <button
+            onClick={() => onAudioChange('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              selectedAudio === 'all'
+                ? 'bg-rose-500/20 text-rose-400 ring-1 ring-rose-500/40'
+                : 'bg-white/5 text-gray-500 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            All ({qualityTorrents.length})
+          </button>
+        )}
+        {audioTypes.map((a) => (
+          <button
+            key={a}
+            onClick={() => onAudioChange(a)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium uppercase transition-all ${
+              selectedAudio === a
+                ? a === 'dub'
+                  ? 'bg-orange-500/20 text-orange-400 ring-1 ring-orange-500/40'
+                  : a === 'dual'
+                    ? 'bg-purple-500/20 text-purple-400 ring-1 ring-purple-500/40'
+                    : 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/40'
+                : 'bg-white/5 text-gray-500 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            {a === 'dub' ? '🇺🇸 Dub' : a === 'dual' ? '🔊 Dual' : '🇯🇵 Sub'}
+            <span className="ml-1 text-[10px] opacity-60">({totalAudioCounts[a] || audioGroups[a]?.length || 0})</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Quality Tabs (secondary) */}
+      {audioTypes.length > 0 && (
+        <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+          {qualities.length > 1 && (
+            <button
+              onClick={() => onQualityChange('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                displayQuality === 'all'
+                  ? 'bg-white/15 text-white'
+                  : 'bg-white/5 text-gray-500 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              All ({qualityTorrents.length})
+            </button>
+          )}
+          {qualities.map((q) => (
+            <button
+              key={q}
+              onClick={() => onQualityChange(q)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                displayQuality === q
+                  ? 'bg-blue-500/20 text-blue-400 ring-1 ring-blue-500/40'
+                  : 'bg-white/5 text-gray-500 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              {q === 'other' ? 'Other' : q.toUpperCase()}
+              <span className="ml-1 text-[10px] opacity-60">({qualityGroups[q]?.filter(t => selectedAudio === 'all' || getAudioType(t.name) === selectedAudio).length || 0})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Torrent List */}
+      {displayTorrents.length > 0 ? (
+        <div className="rounded-2xl border border-white/5 overflow-hidden divide-y divide-white/5">
+          {displayTorrents.map((torrent) => (
+            <TorrentItem
+              key={torrent.hash}
+              torrent={torrent}
+              copiedHash={copiedHash}
+              onPlay={onPlay}
+              onCopy={onCopy}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="text-center py-6 rounded-2xl bg-white/[0.02] border border-white/5">
+          <p className="text-gray-500 text-sm">No torrents in this selection</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Torrent Item ─── */
 
 function TorrentItem({
@@ -512,6 +807,7 @@ function TorrentItem({
 }) {
   const quality = getQuality(torrent.name);
   const group = getGroup(torrent.name);
+  const audio = getAudioType(torrent.name);
   const isCopied = copiedHash === torrent.hash;
 
   return (
@@ -530,6 +826,15 @@ function TorrentItem({
                 {group}
               </span>
             )}
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+              audio === 'dub'
+                ? 'bg-orange-500/20 text-orange-400'
+                : audio === 'dual'
+                  ? 'bg-purple-500/20 text-purple-400'
+                  : 'bg-emerald-500/20 text-emerald-400'
+            }`}>
+              {audio === 'dub' ? '🇺🇸 DUB' : audio === 'dual' ? '🔊 DUAL' : '🇯🇵 SUB'}
+            </span>
             {isBatchTorrent(torrent.name) && (
               <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-500/20 text-purple-400">
                 BATCH
@@ -605,6 +910,19 @@ function getQuality(name: string): string | null {
 function getGroup(name: string): string | null {
   const match = name.match(/^\[([^\]]+)\]/);
   return match ? match[1] : null;
+}
+
+function getAudioType(name: string): 'dub' | 'dual' | 'sub' {
+  // Check dual audio first (it also contains "dub" often)
+  if (/dual\s*audio|dualaudio|dual-audio/i.test(name)) {
+    return 'dual';
+  }
+  // Check for dub markers
+  if (/\bdub(?:bed)?\s*\b|english\s*dub/i.test(name)) {
+    return 'dub';
+  }
+  // Default to sub
+  return 'sub';
 }
 
 /* ─── Loading Skeleton ─── */
