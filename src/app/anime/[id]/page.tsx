@@ -31,6 +31,11 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
   const [watchedEpisodes, setWatchedEpisodes] = useState<Set<number>>(new Set());
   const [anilistUser, setAnilistUser] = useState<AniListUser | null>(null);
   const [syncingEpisode, setSyncingEpisode] = useState<number | null>(null);
+  const [anilistEntry, setAnilistEntry] = useState<{ id: number; status: string; progress: number; score: number } | null>(null);
+  const [entryLoading, setEntryLoading] = useState(false);
+  const [savingEntry, setSavingEntry] = useState(false);
+  const [listMenuOpen, setListMenuOpen] = useState(false);
+  const listMenuRef = useRef<HTMLDivElement>(null);
   const searchTermsRef = useRef<string>('');
 
   // Load watched episodes from localStorage
@@ -44,13 +49,35 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
     } catch {}
   }, [id]);
 
-  // Fetch AniList user
+  // Close list dropdown on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (listMenuRef.current && !listMenuRef.current.contains(e.target as Node)) {
+        setListMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  // Fetch AniList user and current list entry for this anime
   useEffect(() => {
     fetch('/api/auth/anilist/me')
       .then(res => res.json())
-      .then(data => { if (data.user) setAnilistUser(data.user); })
+      .then(data => {
+        if (data.user) {
+          setAnilistUser(data.user);
+          // Now fetch this anime's entry in their list
+          setEntryLoading(true);
+          fetch(`/api/anilist/entry?mediaId=${id}`)
+            .then(r => r.json())
+            .then(d => { if (d.entry) setAnilistEntry(d.entry); })
+            .catch(() => {})
+            .finally(() => setEntryLoading(false));
+        }
+      })
       .catch(() => {});
-  }, []);
+  }, [id]);
 
   // Persist watched episodes to localStorage
   useEffect(() => {
@@ -171,6 +198,28 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
     }
   }, [anime, batchTorrents]);
 
+  const handleListStatusChange = useCallback(async (newStatus: string) => {
+    if (!anilistUser || savingEntry) return;
+    setSavingEntry(true);
+    try {
+      const res = await fetch('/api/anilist/entry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaId: anime?.id, status: newStatus }),
+      });
+      const data = await res.json();
+      if (res.ok && data.entry) {
+        setAnilistEntry(data.entry);
+      } else {
+        console.error('[AniList Entry]', data.error);
+      }
+    } catch (err) {
+      console.error('[AniList Entry Error]', err);
+    } finally {
+      setSavingEntry(false);
+    }
+  }, [anilistUser, anime, savingEntry]);
+
   const handleSyncEpisode = useCallback(async (episode: number) => {
     if (!anilistUser || syncingEpisode !== null) return;
     setSyncingEpisode(episode);
@@ -258,8 +307,8 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
   return (
     <div className="min-h-screen">
       {/* Hero Banner */}
-      <div className="relative h-[50vh] min-h-[400px] overflow-hidden">
-        <div className="absolute inset-0">
+      <div className="relative h-[50vh] min-h-[400px]">
+        <div className="absolute inset-0 overflow-hidden">
           <img
             src={bannerBg}
             alt={title}
@@ -317,6 +366,96 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
                 >
                   View on AniList →
                 </a>
+              </div>
+
+              {/* ─── AniList List Status Dropdown ─── */}
+              <div className="relative mt-4" ref={listMenuRef}>
+                {!anilistUser ? (
+                  <a
+                    href="/api/auth/anilist/login"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-500/15 to-purple-500/15 border border-indigo-500/20 text-indigo-400 hover:from-indigo-500/25 hover:to-purple-500/25 hover:text-indigo-300 transition-all text-xs font-medium"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
+                    </svg>
+                    Connect AniList
+                  </a>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => setListMenuOpen(!listMenuOpen)}
+                      disabled={entryLoading}
+                      className={`
+                        inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium
+                        transition-all duration-150 disabled:opacity-50
+                        ${anilistEntry
+                          ? 'bg-white/[0.06] border border-white/10 text-white hover:bg-white/[0.10]'
+                          : 'bg-gradient-to-r from-indigo-500/15 to-purple-500/15 border border-indigo-500/20 text-indigo-400 hover:from-indigo-500/25 hover:to-purple-500/25'
+                        }
+                      `}
+                    >
+                      {entryLoading ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                          Loading…
+                        </>
+                      ) : anilistEntry ? (
+                        <>
+                          <span>{LIST_ICONS[anilistEntry.status as keyof typeof LIST_ICONS]}</span>
+                          <span>{LIST_LABELS[anilistEntry.status as keyof typeof LIST_LABELS]}</span>
+                          <svg className={`w-3.5 h-3.5 text-gray-500 transition-transform ${listMenuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          </svg>
+                          <span>Add to List</span>
+                          <svg className={`w-3.5 h-3.5 text-gray-500 transition-transform ${listMenuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Dropdown Menu */}
+                    {listMenuOpen && (
+                      <div className="absolute top-full left-0 mt-1.5 w-48 z-50 p-1.5 rounded-2xl bg-[#16162a] border border-white/10 shadow-2xl shadow-black/50 animate-fade-in">
+                        {ANILIST_STATUSES.map(({ status, label, icon }) => {
+                          const isActive = anilistEntry?.status === status;
+                          return (
+                            <button
+                              key={status}
+                              onClick={() => {
+                                handleListStatusChange(status);
+                                setListMenuOpen(false);
+                              }}
+                              disabled={savingEntry}
+                              className={`
+                                flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs font-medium
+                                transition-all duration-150 disabled:opacity-50
+                                ${isActive
+                                  ? 'bg-white/[0.08] text-white'
+                                  : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
+                                }
+                              `}
+                            >
+                              <span className="text-sm">{icon}</span>
+                              <span className="flex-1 text-left">{label}</span>
+                              {isActive && (
+                                <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -1016,6 +1155,35 @@ function InfoRow({ label, value, highlight }: { label: string; value: string; hi
     </div>
   );
 }
+
+/* ─── AniList Status Constants ─── */
+
+const ANILIST_STATUSES = [
+  { status: 'CURRENT', label: 'Watching', icon: '▶️', color: { bg: 'bg-emerald-500/15', text: 'text-emerald-400', ring: 'ring-1 ring-emerald-500/30' } },
+  { status: 'PLANNING', label: 'Plan', icon: '📋', color: { bg: 'bg-blue-500/15', text: 'text-blue-400', ring: 'ring-1 ring-blue-500/30' } },
+  { status: 'COMPLETED', label: 'Completed', icon: '✅', color: { bg: 'bg-indigo-500/15', text: 'text-indigo-400', ring: 'ring-1 ring-indigo-500/30' } },
+  { status: 'PAUSED', label: 'Paused', icon: '⏸️', color: { bg: 'bg-amber-500/15', text: 'text-amber-400', ring: 'ring-1 ring-amber-500/30' } },
+  { status: 'DROPPED', label: 'Dropped', icon: '🗑️', color: { bg: 'bg-red-500/15', text: 'text-red-400', ring: 'ring-1 ring-red-500/30' } },
+  { status: 'REPEATING', label: 'Rewatching', icon: '🔄', color: { bg: 'bg-purple-500/15', text: 'text-purple-400', ring: 'ring-1 ring-purple-500/30' } },
+];
+
+const LIST_ICONS: Record<string, string> = {
+  CURRENT: '▶️',
+  PLANNING: '📋',
+  COMPLETED: '✅',
+  PAUSED: '⏸️',
+  DROPPED: '🗑️',
+  REPEATING: '🔄',
+};
+
+const LIST_LABELS: Record<string, string> = {
+  CURRENT: 'Watching',
+  PLANNING: 'Plan to Watch',
+  COMPLETED: 'Completed',
+  PAUSED: 'On Hold',
+  DROPPED: 'Dropped',
+  REPEATING: 'Rewatching',
+};
 
 /* ─── Helpers ─── */
 

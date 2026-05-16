@@ -2,6 +2,62 @@ const ANILIST_AUTH_URL = 'https://anilist.co/api/v2/oauth/authorize';
 const ANILIST_TOKEN_URL = 'https://anilist.co/api/v2/oauth/token';
 const ANILIST_GRAPHQL_URL = 'https://graphql.anilist.co';
 
+const FETCH_TIMEOUT_MS = 15_000;
+const MAX_RETRIES = 2;
+
+/**
+ * Resilient fetch wrapper with timeout and retry logic.
+ * Retries on network errors and 5xx status codes.
+ * Aborts after FETCH_TIMEOUT_MS.
+ */
+async function fetchAnilist(url: string, options: RequestInit = {}, retries = MAX_RETRIES): Promise<Response> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      // Retry on 5xx server errors (but not 4xx client errors)
+      if (!res.ok && res.status >= 500 && attempt < retries) {
+        console.warn(`[AniList Retry] ${url} returned ${res.status}, retrying (${attempt + 1}/${retries})...`);
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); // exponential backoff
+        continue;
+      }
+
+      return res;
+    } catch (err) {
+      clearTimeout(timeoutId);
+
+      // If aborted due to timeout (Node.js may throw as Error or DOMException)
+      const isAbortError = (err instanceof DOMException || err instanceof Error) && err.name === 'AbortError';
+      if (isAbortError) {
+        if (attempt < retries) {
+          console.warn(`[AniList Retry] ${url} timed out, retrying (${attempt + 1}/${retries})...`);
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`Request to ${url} timed out after ${FETCH_TIMEOUT_MS}ms`);
+      }
+
+      // Network error (ECONNRESET, ENOTFOUND, ETIMEDOUT, etc.)
+      if (attempt < retries) {
+        console.warn(`[AniList Retry] ${url} failed with ${err instanceof Error ? err.message : err}, retrying (${attempt + 1}/${retries})...`);
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+
+      throw err;
+    }
+  }
+
+  throw new Error('Unreachable: fetchAnilist retry loop exhausted');
+}
+
 /** Generate the AniList OAuth authorization URL */
 export function getAuthUrl(): string {
   const params = new URLSearchParams({
@@ -18,7 +74,7 @@ export async function exchangeCodeForToken(code: string): Promise<{
   token_type: string;
   expires_in: number;
 }> {
-  const res = await fetch(ANILIST_TOKEN_URL, {
+  const res = await fetchAnilist(ANILIST_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
@@ -57,7 +113,7 @@ export async function fetchUser(token: string): Promise<AniListUser> {
     }
   `;
 
-  const res = await fetch(ANILIST_GRAPHQL_URL, {
+  const res = await fetchAnilist(ANILIST_GRAPHQL_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -124,7 +180,7 @@ export async function fetchUserWithLists(token: string): Promise<{
   user: AniListUserWithStats;
   lists: MediaListGroup[];
 }> {
-  // First get the user ID
+  // Fetch user info + stats
   const userQuery = `
     query {
       Viewer {
@@ -144,13 +200,15 @@ export async function fetchUserWithLists(token: string): Promise<{
     }
   `;
 
-  const userRes = await fetch(ANILIST_GRAPHQL_URL, {
+  const commonHeaders = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+
+  const userRes = await fetchAnilist(ANILIST_GRAPHQL_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers: commonHeaders,
     body: JSON.stringify({ query: userQuery }),
   });
 
@@ -196,13 +254,9 @@ export async function fetchUserWithLists(token: string): Promise<{
     }
   `;
 
-  const listsRes = await fetch(ANILIST_GRAPHQL_URL, {
+  const listsRes = await fetchAnilist(ANILIST_GRAPHQL_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers: commonHeaders,
     body: JSON.stringify({ query: listsQuery, variables: { userId } }),
   });
 
@@ -216,6 +270,77 @@ export async function fetchUserWithLists(token: string): Promise<{
   const lists = (listsJson.data?.MediaListCollection?.lists as MediaListGroup[]) || [];
 
   return { user: viewer, lists };
+}
+
+/** Fetch the user's media list entry for a specific anime (to check if it's already in a list) */
+export async function fetchMediaListEntry(
+  token: string,
+  mediaId: number,
+): Promise<{ id: number; status: string; progress: number; score: number } | null> {
+  const query = `
+    query ($mediaId: Int) {
+      MediaList(mediaId: $mediaId, type: ANIME) {
+        id
+        status
+        progress
+        score
+      }
+    }
+  `;
+
+  const res = await fetchAnilist(ANILIST_GRAPHQL_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ query, variables: { mediaId } }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to fetch list entry (${res.status}): ${body}`);
+  }
+
+  const json = await res.json();
+  // MediaList returns null if the media is not in any list
+  return (json.data?.MediaList as { id: number; status: string; progress: number; score: number } | null) || null;
+}
+
+/** Save or update a media list entry on AniList (add anime to a list or change its status) */
+export async function saveMediaListEntry(
+  token: string,
+  mediaId: number,
+  status: string,
+): Promise<{ id: number; status: string; progress: number }> {
+  const mutation = `
+    mutation ($mediaId: Int, $status: MediaListStatus) {
+      SaveMediaListEntry(mediaId: $mediaId, status: $status) {
+        id
+        status
+        progress
+      }
+    }
+  `;
+
+  const res = await fetchAnilist(ANILIST_GRAPHQL_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ query: mutation, variables: { mediaId, status } }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to save list entry (${res.status}): ${body}`);
+  }
+
+  const json = await res.json();
+  return json.data.SaveMediaListEntry as { id: number; status: string; progress: number };
 }
 
 /** Sync anime progress on AniList (update episodes watched & optionally mark complete) */
@@ -242,7 +367,7 @@ export async function syncProgress(
     variables.completedAt = { year: new Date().getFullYear(), month: new Date().getMonth() + 1, day: new Date().getDate() };
   }
 
-  const res = await fetch(ANILIST_GRAPHQL_URL, {
+  const res = await fetchAnilist(ANILIST_GRAPHQL_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
