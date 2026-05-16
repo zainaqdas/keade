@@ -5,6 +5,7 @@ import { AnimeDetailData, NyaaTorrent } from '@/lib/types';
 import { isBatchTorrent } from '@/lib/nyaa/parser';
 import { stripHtml, formatScore, formatNumber, statusColor, formatStatus } from '@/lib/utils';
 import PlayerWithStatus from '@/components/PlayerWithStatus';
+import type { AniListUser } from '@/lib/anilist';
 
 const EPISODES_PER_PAGE = 50;
 
@@ -26,7 +27,36 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
   const [batchTorrents, setBatchTorrents] = useState<NyaaTorrent[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchExpanded, setBatchExpanded] = useState(false);
+  const [playingEpisodeNumber, setPlayingEpisodeNumber] = useState<number | null>(null);
+  const [watchedEpisodes, setWatchedEpisodes] = useState<Set<number>>(new Set());
+  const [anilistUser, setAnilistUser] = useState<AniListUser | null>(null);
+  const [syncingEpisode, setSyncingEpisode] = useState<number | null>(null);
   const searchTermsRef = useRef<string>('');
+
+  // Load watched episodes from localStorage
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`watched_${id}`);
+      if (stored) {
+        const arr = JSON.parse(stored) as number[];
+        setWatchedEpisodes(new Set(arr));
+      }
+    } catch {}
+  }, [id]);
+
+  // Fetch AniList user
+  useEffect(() => {
+    fetch('/api/auth/anilist/me')
+      .then(res => res.json())
+      .then(data => { if (data.user) setAnilistUser(data.user); })
+      .catch(() => {});
+  }, []);
+
+  // Persist watched episodes to localStorage
+  useEffect(() => {
+    const arr = Array.from(watchedEpisodes);
+    localStorage.setItem(`watched_${id}`, JSON.stringify(arr));
+  }, [watchedEpisodes, id]);
 
   useEffect(() => {
     async function fetchData() {
@@ -102,10 +132,13 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
   const handlePlay = useCallback((torrent: NyaaTorrent) => {
     setPlayingTorrent(torrent);
     setPlayerVisible(true);
+    if (selectedEpisode !== null) {
+      setPlayingEpisodeNumber(selectedEpisode);
+    }
     setTimeout(() => {
       document.getElementById('player-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 100);
-  }, []);
+  }, [selectedEpisode]);
 
   const fetchBatchTorrents = useCallback(async () => {
     if (batchTorrents.length > 0) {
@@ -137,6 +170,35 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
       setBatchLoading(false);
     }
   }, [anime, batchTorrents]);
+
+  const handleSyncEpisode = useCallback(async (episode: number) => {
+    if (!anilistUser || syncingEpisode !== null) return;
+    setSyncingEpisode(episode);
+    try {
+      const total = anime?.episodes ||
+        (anime?.nextAiringEpisode ? anime.nextAiringEpisode.episode - 1 : 0) ||
+        anime?.airingSchedule.length || 0;
+      const res = await fetch('/api/anilist/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mediaId: anime?.id,
+          progress: episode,
+          totalEpisodes: total || undefined,
+        }),
+      });
+      if (res.ok) {
+        setWatchedEpisodes(prev => new Set(prev).add(episode));
+      } else {
+        const data = await res.json();
+        console.error('[AniList Sync]', data.error);
+      }
+    } catch (err) {
+      console.error('[AniList Sync Error]', err);
+    } finally {
+      setSyncingEpisode(null);
+    }
+  }, [anilistUser, anime, syncingEpisode]);
 
   const handleCopyMagnet = useCallback(async (torrent: NyaaTorrent) => {
     try {
@@ -289,8 +351,54 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
                   onClose={() => {
                     setPlayingTorrent(null);
                     setPlayerVisible(false);
+                    setPlayingEpisodeNumber(null);
                   }}
                 />
+
+                {/* Mark Watched — appears when the player is open for a single episode */}
+                {playingEpisodeNumber !== null && (
+                  <div className="mt-3 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {watchedEpisodes.has(playingEpisodeNumber) ? (
+                        <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-medium">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Episode {playingEpisodeNumber} — Watched
+                        </span>
+                      ) : null}
+                      {anilistUser && !watchedEpisodes.has(playingEpisodeNumber) && (
+                        <button
+                          onClick={() => handleSyncEpisode(playingEpisodeNumber)}
+                          disabled={syncingEpisode !== null}
+                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 hover:text-blue-300 transition-all text-xs font-medium disabled:opacity-50"
+                        >
+                          {syncingEpisode === playingEpisodeNumber ? (
+                            <>
+                              <div className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                              Syncing…
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                              Mark Episode {playingEpisodeNumber} as Watched
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                    {!anilistUser && (
+                      <a
+                        href="/api/auth/anilist/login"
+                        className="text-xs text-gray-500 hover:text-indigo-400 transition-colors"
+                      >
+                        Connect AniList to track your progress
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -365,15 +473,23 @@ export default function AnimeDetailPage({ params }: { params: { id: string } }) 
                             transition-all duration-150
                             ${isSelected
                               ? 'bg-indigo-500/20 text-indigo-400 ring-1 ring-indigo-500/50 scale-105'
-                              : hasTorrents
-                                ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
-                                : 'bg-white/[0.04] text-gray-400 hover:bg-white/[0.08] hover:text-white'
+                              : watchedEpisodes.has(ep)
+                                ? 'bg-emerald-500/15 text-emerald-400 ring-1 ring-emerald-500/30'
+                                : hasTorrents
+                                  ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
+                                  : 'bg-white/[0.04] text-gray-400 hover:bg-white/[0.08] hover:text-white'
                             }
                           `}
-                          title={`Episode ${ep}${hasTorrents ? ` (${episodeTorrents[ep].length} torrents)` : ''}`}
+                          title={`Episode ${ep}${watchedEpisodes.has(ep) ? ' — Watched ✓' : hasTorrents ? ` (${episodeTorrents[ep].length} torrents)` : ''}`}
                         >
                           {ep}
-                          {hasTorrents && (
+                          {watchedEpisodes.has(ep) ? (
+                            <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-3.5 h-3.5 bg-emerald-500 rounded-full">
+                              <svg className="w-2 h-2 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            </span>
+                          ) : hasTorrents && (
                             <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-emerald-400 rounded-full" />
                           )}
                         </button>
