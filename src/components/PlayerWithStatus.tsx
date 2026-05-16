@@ -80,6 +80,7 @@ export default function PlayerWithStatus({
       lang: 'en',
       poster: poster || undefined,
       title: title || undefined,
+      width: '100%',
       on: (e: { name: string }) => {
         console.debug('[Webtor SDK event]', e.name, e);
         if (e.name === 'error' || e.name === (window.webtor as any)?.TORRENT_ERROR) {
@@ -198,13 +199,12 @@ export default function PlayerWithStatus({
       {/* Note: no overflow-hidden here — WebTor SDK renders controls that
           extend to the edge, and clipping them hides the fullscreen button. */}
       <div className="relative rounded-xl bg-black border border-white/5">
-        <div className="w-full" style={{ minHeight: '360px' }}>
+        <div className="w-full min-h-[200px] sm:min-h-[360px]">
           {/* SDK Container (primary) — only in DOM when active */}
           {mode === 'sdk' && (
             <div
               id="webtor-sdk-container"
-              className="webtor w-full h-full"
-              style={{ minHeight: '360px' }}
+              className="webtor w-full h-full min-h-[200px] sm:min-h-[360px]"
             />
           )}
 
@@ -213,8 +213,7 @@ export default function PlayerWithStatus({
             <iframe
               src={embedUrl}
               title="Video Player"
-              className="w-full h-full border-0"
-              style={{ minHeight: '360px' }}
+              className="w-full h-full border-0 min-h-[200px] sm:min-h-[360px]"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
               allowFullScreen
               onLoad={handleIframeLoad}
